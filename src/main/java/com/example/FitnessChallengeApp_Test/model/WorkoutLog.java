@@ -74,4 +74,3 @@ public class WorkoutLog {
     @Column(length = 250)
     private String notes;
 }
-

@@ -11,15 +11,26 @@ import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.web.bind.annotation.RequestParam;
+import java.util.Set;
 
 /**
  * Controller for Athlete Workout Logging.
- * Handles workout form rendering, @ManyToOne Challenge binding, Bean Validation,
- * and listing logged workouts. Students will refactor displayWorkoutLogs() in the Lab
+ * Handles workout form rendering, @ManyToOne Challenge binding, Bean
+ * Validation,
+ * and listing logged workouts. Students will refactor displayWorkoutLogs() in
+ * the Lab
  * to support pagination, sorting, and custom repository queries.
  */
 @Controller
 public class WorkoutLogController {
+
+    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of("id", "athleteName", "workoutDate", "durationMinutes",
+            "caloriesBurned", "intensityLevel");
 
     private final WorkoutLogService workoutLogService;
     private final ChallengeService challengeService;
@@ -44,8 +55,7 @@ public class WorkoutLogController {
     public String processLogWorkout(
             @Valid @ModelAttribute("workoutLog") WorkoutLog workoutLog,
             BindingResult bindingResult,
-            Model model
-    ) {
+            Model model) {
         Challenge selectedChallenge = null;
         if (workoutLog.getChallenge() == null || workoutLog.getChallenge().getId() == null) {
             bindingResult.rejectValue("challenge.id", "error.challenge", "Please select an active challenge");
@@ -68,10 +78,66 @@ public class WorkoutLogController {
     }
 
     @GetMapping("/workout-logs")
-    public String showWorkoutLogs(Model model) {
-        model.addAttribute("workoutLogs", workoutLogService.getAllLogs());
+    public String showWorkoutLogs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "5") int size,
+            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(defaultValue = "DESC") String direction,
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "all") String filterType,
+            Model model) {
+        // Sanitize inputs
+        page = Math.max(page, 0);
+        size = size < 1 ? 5 : size;
+        if (!ALLOWED_SORT_FIELDS.contains(sort)) {
+            sort = "id";
+        }
+        direction = "ASC".equalsIgnoreCase(direction) ? "ASC" : "DESC";
+
+        String keyword = (search == null) ? "" : search.trim();
+
+        // Sorted pageable for derived queries / findAll
+        Pageable sortedPageable = PageRequest.of(page, size, Sort.by(Sort.Direction.fromString(direction), sort));
+        // Unsorted pageable for @Query methods that already contain ORDER BY
+        Pageable unsortedPageable = PageRequest.of(page, size);
+
+        Page<WorkoutLog> logPage;
+        switch (filterType) {
+            case "athlete":
+                logPage = workoutLogService.searchByAthleteName(keyword, sortedPageable);
+                break;
+            case "calories":
+                int minCalories;
+                try {
+                    minCalories = Integer.parseInt(keyword);
+                } catch (NumberFormatException e) {
+                    minCalories = 200;
+                }
+                logPage = workoutLogService.getLogsByMinCalories(minCalories, sortedPageable);
+                break;
+            case "highestCalories":
+                logPage = workoutLogService.getHighestCalorieLogs(unsortedPageable);
+                break;
+            case "intensityDuration":
+                logPage = workoutLogService.getLogsByIntensityAndMinDuration(keyword, 25, unsortedPageable);
+                break;
+            default:
+                logPage = workoutLogService.getLogs(sortedPageable);
+                break;
+        }
+
+        model.addAttribute("workoutLogs", logPage.getContent());
+        model.addAttribute("totalPages", logPage.getTotalPages());
+        model.addAttribute("totalElements", logPage.getTotalElements());
+        model.addAttribute("currentPage", logPage.getNumber());
+        model.addAttribute("pageSize", size);
+        model.addAttribute("hasPrevious", logPage.hasPrevious());
+        model.addAttribute("hasNext", logPage.hasNext());
+        model.addAttribute("search", search);
+        model.addAttribute("sort", sort);
+        model.addAttribute("direction", direction);
+        model.addAttribute("filterType", filterType);
         model.addAttribute("pageTitle", "FitSquad Hub - Community Workout Logs");
         return "workout-logs";
     }
 }
-
